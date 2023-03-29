@@ -15,6 +15,8 @@ If bundler is not being used to manage dependencies, install the gem by executin
 ## Usage
 
 ```ruby
+require 'xor'
+
 filter = Xor::Filter.new(100)
 filter.add('bar')
 
