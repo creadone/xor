@@ -18,7 +18,7 @@ XOR‑фильтр с динамическими обновлениями (add/r
 require 'xor'
 
 # Создание фильтра. Опции:
-# - capacity: подсказка для начального размера
+# - capacity: размер
 # - fingerprint_bits: 4..16 (по умолчанию 8)
 # - auto_rebuild: true/false (по умолчанию true)
 filter = Xor::Filter.new(capacity: 10_000, fingerprint_bits: 8)
