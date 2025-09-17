@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    xor (0.1.0)
+    xor (1.0.0)
 
 GEM
   remote: https://rubygems.org/
@@ -32,6 +32,7 @@ GEM
     unicode-display_width (1.8.0)
 
 PLATFORMS
+  arm64-darwin-22
   x86_64-darwin-21
 
 DEPENDENCIES
