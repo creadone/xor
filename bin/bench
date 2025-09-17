@@ -1,0 +1,135 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require 'bundler/setup'
+$LOAD_PATH.unshift File.expand_path('../../lib', __dir__)
+require 'xor'
+require 'securerandom'
+require 'benchmark'
+
+def log(msg)
+  $stdout.puts msg
+  $stdout.flush
+end
+
+def generate_keys(count, prefix: "k")
+  Array.new(count) { |i| "#{prefix}#{i}_#{SecureRandom.hex(4)}" }
+end
+
+def time_now
+  Process.clock_gettime(Process::CLOCK_MONOTONIC)
+end
+
+def human(n)
+  return "0" if n == 0
+  units = %w[]
+  s = n.to_f
+  if s >= 1_000_000_000
+    format('%.2fB', s / 1_000_000_000)
+  elsif s >= 1_000_000
+    format('%.2fM', s / 1_000_000)
+  elsif s >= 1_000
+    format('%.2fk', s / 1_000)
+  else
+    s.to_i.to_s
+  end
+end
+
+TOTAL_KEYS   = (ENV['TOTAL_KEYS']   || '500000').to_i
+READ_THREADS = (ENV['READ_THREADS'] || '8').to_i
+WRITE_THREADS= (ENV['WRITE_THREADS']|| '2').to_i
+DURATION_S   = (ENV['DURATION_S']   || '10').to_i
+BATCH_SIZE   = (ENV['BATCH_SIZE']   || '10000').to_i
+FP_BITS      = (ENV['FP_BITS']      || '8').to_i
+MODE         = (ENV['MODE']         || 'mixed') # 'read' or 'mixed'
+
+log "Config: keys=#{human(TOTAL_KEYS)} read_threads=#{READ_THREADS} write_threads=#{WRITE_THREADS} duration=#{DURATION_S}s batch=#{BATCH_SIZE} fp_bits=#{FP_BITS} mode=#{MODE}"
+
+log "Generating keys..."
+all_keys = generate_keys(TOTAL_KEYS)
+
+log "Building filter (bulk, no auto rebuild)..."
+filter = Xor::Filter.new(capacity: TOTAL_KEYS, fingerprint_bits: FP_BITS, auto_rebuild: false)
+
+# Load in batches
+all_keys.each_slice(BATCH_SIZE) { |slice| filter.add_all(slice) }
+filter.compact!
+log "Filter built. size=#{filter.size}"
+
+# Precompute misses
+miss_keys = generate_keys([TOTAL_KEYS / 10, 10_000].max, prefix: 'm')
+
+stop = false
+read_ops = 0
+write_ops = 0
+
+reader = proc do
+  rnd = Random.new
+  local_ops = 0
+  keys = all_keys
+  misses = miss_keys
+  while !stop
+    if rnd.rand < 0.9
+      k = keys[rnd.rand(keys.length)]
+    else
+      k = misses[rnd.rand(misses.length)]
+    end
+    filter.include?(k)
+    local_ops += 1
+  end
+  local_ops
+end
+
+writer = proc do
+  rnd = Random.new
+  local_ops = 0
+  # Maintain a small working set for churn
+  work = all_keys.sample(BATCH_SIZE)
+  while !stop
+    # remove half, add half different
+    rem = work.sample(work.length / 2)
+    add = generate_keys(rem.length, prefix: 'w')
+    filter.remove_all(rem)
+    filter.add_all(add)
+    # keep work rolling
+    work = (work - rem) + add
+    local_ops += rem.length + add.length
+  end
+  local_ops
+end
+
+log "Running benchmark..."
+threads = []
+read_counts = Array.new(READ_THREADS, 0)
+write_counts = Array.new(WRITE_THREADS, 0)
+
+READ_THREADS.times do |i|
+  threads << Thread.new do
+    read_counts[i] = reader.call
+  end
+end
+
+if MODE == 'mixed'
+  WRITE_THREADS.times do |i|
+    threads << Thread.new do
+      write_counts[i] = writer.call
+    end
+  end
+end
+
+start = time_now
+sleep DURATION_S
+stop = true
+threads.each(&:join)
+elapsed = time_now - start
+
+total_reads = read_counts.sum
+total_writes = write_counts.sum
+
+log "Elapsed: #{format('%.2f', elapsed)}s"
+log "Read ops:  #{human(total_reads)} (#{human((total_reads / elapsed).to_i)}/s)"
+log "Write ops: #{human(total_writes)} (#{human((total_writes / elapsed).to_i)}/s)"
+
+log "Membership spot-check: present=#{filter.include?(all_keys[0])} miss=#{filter.include?(miss_keys[0])}"
+
+
